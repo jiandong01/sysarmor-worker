@@ -1,0 +1,163 @@
+# SysArmor Vector VRL 脚本 - Auditd 事件处理
+# 基于 MVP_DESIGN.md 方案：处理 rsyslog 发送的 auditd 数据
+
+# 添加处理时间戳
+.processed_at = now()
+
+# 添加数据源标识
+.data_source = "syslog"
+.deployment_type = "agentless"
+.server_role = "worker"
+
+# 初始化默认值
+.event_type = "unknown"
+.event_num = 0
+.process_name = "unknown"
+.process_pid = 0
+.process_uid = 0
+.file_name = ""
+.audit_type = "unknown"
+.audit_msg = ""
+.timestamp = now()
+
+# 解析 syslog 中的 auditd 消息
+if exists(.message) && is_string(.message) {
+    # 如果消息包含 auditd 格式，进行解析
+    if contains(.message, "type=") {
+        # 提取审计类型
+        .audit_type = extract(.message, r'type=(\w+)') ?? "unknown"
+        
+        # 提取审计消息时间戳
+        .audit_msg = extract(.message, r'msg=audit\(([^)]+)\)') ?? ""
+        
+        # 提取进程信息
+        .process_name = extract(.message, r'comm="([^"]+)"') ?? "unknown"
+        .process_pid = to_int(extract(.message, r'pid=(\d+)') ?? "0") ?? 0
+        .process_uid = to_int(extract(.message, r'uid=(\d+)') ?? "0") ?? 0
+        
+        # 提取文件信息
+        .file_name = extract(.message, r'name="([^"]+)"') ?? ""
+        
+        # 提取事件编号
+        .event_num = to_int(extract(.message, r'msg=audit\([\d.]+:(\d+)\)') ?? "0") ?? 0
+        
+        # 设置事件类型
+        .event_type = .audit_type
+        
+        # 如果有审计时间戳，尝试解析
+        if .audit_msg != "" {
+            audit_timestamp = extract(.audit_msg, r'^([\d.]+)')
+            if audit_timestamp != null {
+                .timestamp = from_unix_timestamp(to_float(audit_timestamp) ?? 0.0) ?? now()
+            }
+        }
+    }
+}
+
+# 安全分析
+.security_flags = []
+.risk_score = 0.0
+
+# 检查可疑进程
+if contains(.process_name, "nc") || contains(.process_name, "netcat") {
+    .security_flags = push(.security_flags, "suspicious_network_tool")
+    .risk_score = .risk_score + 0.3
+}
+
+if contains(.process_name, "wget") || contains(.process_name, "curl") {
+    .security_flags = push(.security_flags, "download_tool")
+    .risk_score = .risk_score + 0.2
+}
+
+if contains(.process_name, "bash") || contains(.process_name, "sh") {
+    if contains(.file_name, "/tmp/") || contains(.file_name, "/var/tmp/") {
+        .security_flags = push(.security_flags, "shell_in_temp")
+        .risk_score = .risk_score + 0.4
+    }
+}
+
+# 检查可疑文件路径
+if contains(.file_name, "/tmp/") || contains(.file_name, "/var/tmp/") {
+    .security_flags = push(.security_flags, "suspicious_temp_path")
+    .risk_score = .risk_score + 0.2
+}
+
+if contains(.file_name, "/etc/passwd") || contains(.file_name, "/etc/shadow") {
+    .security_flags = push(.security_flags, "sensitive_file_access")
+    .risk_score = .risk_score + 0.3
+}
+
+# 检查特定审计类型的风险
+if .audit_type == "EXECVE" {
+    .security_flags = push(.security_flags, "process_execution")
+    .risk_score = .risk_score + 0.1
+}
+
+if .audit_type == "SYSCALL" {
+    if contains(.message, "execve") {
+        .security_flags = push(.security_flags, "syscall_execve")
+        .risk_score = .risk_score + 0.1
+    }
+}
+
+if .audit_type == "PATH" {
+    if contains(.file_name, "/bin/") || contains(.file_name, "/sbin/") {
+        .security_flags = push(.security_flags, "system_binary_access")
+        .risk_score = .risk_score + 0.1
+    }
+}
+
+# 检查网络连接（如果文件名包含网络连接格式）
+if contains(.file_name, "->") {
+    .security_flags = push(.security_flags, "network_connection")
+    .risk_score = .risk_score + 0.1
+    
+    # 解析网络连接
+    network_parts = split(.file_name, "->")
+    if length(network_parts) == 2 {
+        .source_addr = network_parts[0]
+        .dest_addr = network_parts[1]
+    }
+}
+
+# 检查高权限用户活动
+if .process_uid == 0 {
+    .security_flags = push(.security_flags, "root_activity")
+    .risk_score = .risk_score + 0.1
+}
+
+# 设置风险级别
+if .risk_score >= 0.8 {
+    .risk_level = "high"
+} else if .risk_score >= 0.5 {
+    .risk_level = "medium"
+} else if .risk_score >= 0.2 {
+    .risk_level = "low"
+} else {
+    .risk_level = "info"
+}
+
+# 添加分析结果摘要
+.analysis_summary = {
+    "event_type": .event_type,
+    "audit_type": .audit_type,
+    "process": .process_name,
+    "process_pid": .process_pid,
+    "process_uid": .process_uid,
+    "file_name": .file_name,
+    "risk_level": .risk_level,
+    "risk_score": .risk_score,
+    "flags_count": length(.security_flags),
+    "timestamp": .processed_at,
+    "original_timestamp": .timestamp
+}
+
+# 清理不需要的字段（保留原始消息用于调试）
+del(.file)
+del(.host)
+del(.source_type)
+
+# 保留原始 syslog 字段用于追溯
+.syslog_facility = .facility
+.syslog_severity = .severity
+.syslog_hostname = .hostname

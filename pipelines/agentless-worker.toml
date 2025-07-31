@@ -1,0 +1,52 @@
+# SysArmor Vector 配置 - Agentless Worker 管道
+# 基于 MVP_DESIGN.md 方案：接收 rsyslog 数据并转发到 Kafka
+
+# API 配置
+[api]
+enabled = true
+address = "0.0.0.0:8686"
+playground = true
+
+# 1. 接收 syslog 数据源
+[sources.syslog_auditd]
+type = "syslog"
+address = "0.0.0.0:6000"
+mode = "tcp"
+protocol = "rfc5424"
+
+# 2. 解析和处理 syslog 数据
+[transforms.parse_syslog]
+type = "remap"
+inputs = ["syslog_auditd"]
+file = "/etc/vector/scripts/process_auditd_events.vrl"
+
+# 3. 输出到 Kafka
+[sinks.kafka_out]
+type = "kafka"
+inputs = ["parse_syslog"]
+bootstrap_servers = "${KAFKA_BOOTSTRAP_SERVERS}"
+topic = "${KAFKA_TOPIC}"
+encoding.codec = "json"
+compression = "snappy"
+
+# 可选可靠性增强
+[sinks.kafka_out.buffer]
+type = "disk"
+max_size = 500000000   # 500MB
+
+# 4. Prometheus 指标导出
+[sources.prom_metrics]
+type = "internal_metrics"
+
+[sinks.prometheus]
+type = "prometheus_exporter"
+address = "0.0.0.0:9090"
+inputs = ["prom_metrics"]
+
+# 5. 可选：调试输出到控制台（开发环境）
+[sinks.console_debug]
+type = "console"
+inputs = ["parse_syslog"]
+encoding.codec = "json"
+# 只在调试模式下启用
+condition = '${DEBUG_MODE:false}'

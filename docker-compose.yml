@@ -16,6 +16,8 @@ services:
       - vector_logs:/var/log/vector
     ports:
       - "${VECTOR_API_PORT:-8686}:8686"
+      - "${SYSLOG_PORT:-6000}:6000"
+      - "${METRICS_PORT:-9090}:9090"
     networks:
       - sysarmor-network
     command: ["--config", "${VECTOR_CONFIG_PATH:-/etc/vector/pipelines/default.toml}"]
