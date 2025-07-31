@@ -1,0 +1,116 @@
+# SysArmor Vector VRL 脚本
+# 处理安全事件数据
+
+# 解析 JSON 数据
+if is_string(.message) {
+    . = parse_json!(.message)
+}
+
+# 添加处理时间戳
+.processed_at = now()
+
+# 添加数据源标识
+.data_source = "file"
+
+# 初始化默认值
+.event_type = "unknown"
+.event_num = 0
+.process_name = "unknown"
+.process_pid = 0
+.fd_name = ""
+.timestamp = now()
+
+# 解析原始数据
+if exists(.raw_data) && is_string(.raw_data) {
+    parsed_result = parse_json(.raw_data) ?? {}
+    
+    # 提取事件信息
+    if exists(parsed_result.event) {
+        event_data = parsed_result.event
+        
+        if exists(event_data."evt.type") {
+            .event_type = string!(event_data."evt.type")
+        }
+        
+        if exists(event_data."evt.num") {
+            .event_num, _ = to_int(event_data."evt.num")
+        }
+        
+        if exists(event_data."proc.name") {
+            .process_name = string!(event_data."proc.name")
+        }
+        
+        if exists(event_data."proc.pid") {
+            .process_pid, _ = to_int(event_data."proc.pid")
+        }
+        
+        if exists(event_data."fd.name") {
+            .fd_name = string!(event_data."fd.name")
+        }
+        
+        if exists(event_data."evt.time") {
+            .timestamp = event_data."evt.time"
+        }
+    }
+}
+
+# 安全分析
+.security_flags = []
+.risk_score = 0.0
+
+# 检查可疑进程
+if contains(.process_name, "nc") || contains(.process_name, "netcat") {
+    .security_flags = push(.security_flags, "suspicious_network_tool")
+    .risk_score = .risk_score + 0.3
+}
+
+if contains(.process_name, "wget") || contains(.process_name, "curl") {
+    .security_flags = push(.security_flags, "download_tool")
+    .risk_score = .risk_score + 0.2
+}
+
+# 检查可疑文件路径
+if contains(.fd_name, "/tmp/") || contains(.fd_name, "/var/tmp/") {
+    .security_flags = push(.security_flags, "suspicious_temp_path")
+    .risk_score = .risk_score + 0.2
+}
+
+# 检查网络连接
+if contains(.fd_name, "->") {
+    .security_flags = push(.security_flags, "network_connection")
+    .risk_score = .risk_score + 0.1
+    
+    # 解析网络连接
+    network_parts = split(.fd_name, "->")
+    if length(network_parts) == 2 {
+        .source_addr = network_parts[0]
+        .dest_addr = network_parts[1]
+    }
+}
+
+# 设置风险级别
+if .risk_score >= 0.8 {
+    .risk_level = "high"
+} else if .risk_score >= 0.5 {
+    .risk_level = "medium"
+} else if .risk_score >= 0.2 {
+    .risk_level = "low"
+} else {
+    .risk_level = "info"
+}
+
+# 添加分析结果摘要
+.analysis_summary = {
+    "event_type": .event_type,
+    "process": .process_name,
+    "risk_level": .risk_level,
+    "risk_score": .risk_score,
+    "flags_count": length(.security_flags),
+    "timestamp": .processed_at
+}
+
+# 清理不需要的字段
+del(.file)
+del(.host)
+del(.source_type)
+del(.raw_data)

@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # 单 Vector 服务 - 支持动态配置切换
+  vector:
+    image: timberio/vector:0.34.0-alpine
+    container_name: sysarmor-vector
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./pipelines:/etc/vector/pipelines:ro
+      - ./scripts:/etc/vector/scripts:ro
+      - ./data:/data:ro
+      - vector_data:/var/lib/vector
+      - vector_logs:/var/log/vector
+    ports:
+      - "${VECTOR_API_PORT:-8686}:8686"
+    networks:
+      - sysarmor-network
+    command: ["--config", "${VECTOR_CONFIG_PATH:-/etc/vector/pipelines/default.toml}"]
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8686/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    
+    environment:
+      - VECTOR_LOG=${VECTOR_LOG:-info}
+      - VECTOR_REQUIRE_HEALTHY=${VECTOR_REQUIRE_HEALTHY:-false}
+      - RUST_LOG=${RUST_LOG:-info}
+      - VECTOR_THREADS=${VECTOR_THREADS:-2}
+      - VECTOR_API_ENABLED=true
+      - VECTOR_API_ADDRESS=0.0.0.0:8686
+
+volumes:
+  vector_data:
+    driver: local
+  vector_logs:
+    driver: local
+
+networks:
+  sysarmor-network:
+    driver: bridge
+    name: sysarmor-network

@@ -1,0 +1,27 @@
+# SysArmor Vector 默认管道配置
+# 从文件读取数据，使用 VRL 脚本处理，输出到控制台
+
+# API 配置
+[api]
+enabled = true
+address = "0.0.0.0:8686"
+playground = true
+
+# 数据源：文件输入
+[sources.file_input]
+type = "file"
+include = ["/data/sample-events.jsonl"]
+read_from = "beginning"
+max_line_bytes = 1048576
+
+# 数据转换：使用 VRL 脚本处理
+[transforms.process_events]
+type = "remap"
+inputs = ["file_input"]
+file = "/etc/vector/scripts/process_events.vrl"
+
+# 输出：控制台
+[sinks.console_output]
+type = "console"
+inputs = ["process_events"]
+encoding.codec = "json"
